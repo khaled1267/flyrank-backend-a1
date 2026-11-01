@@ -11,25 +11,10 @@ app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 const getTasks = db.prepare("SELECT * FROM tasks");
 const getTaskById = db.prepare("SELECT * FROM tasks WHERE id = ?");
 const insertTask = db.prepare("INSERT INTO tasks (title, done) VALUES (?, ?)");
-
-// In-memory tasks
-let tasks = [
-  {
-    id: 1,
-    title: "Learn Node.js",
-    done: false,
-  },
-  {
-    id: 2,
-    title: "Learn Express.js",
-    done: false,
-  },
-  {
-    id: 3,
-    title: "Build CRUD API",
-    done: true,
-  },
-];
+const updateTask = db.prepare(
+  "UPDATE tasks SET title = COALESCE(?, title), done = COALESCE(?, done) WHERE id = ?",
+);
+const deleteTask = db.prepare("DELETE FROM tasks WHERE id = ?");
 
 // Root endpoint
 app.get("/", (req, res) => {
@@ -117,7 +102,14 @@ app.post("/tasks", (req, res) => {
 app.put("/tasks/:id", (req, res) => {
   const id = Number(req.params.id);
 
-  const task = tasks.find((task) => task.id === id);
+  let task;
+
+  try {
+    task = getTaskById.get(id);
+  } catch (error) {
+    console.error("Failed to retrieve task for update:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 
   if (!task) {
     return res.status(404).json({
@@ -125,7 +117,7 @@ app.put("/tasks/:id", (req, res) => {
     });
   }
 
-  const { title, done } = req.body;
+  const { title, done } = req.body ?? {};
 
   // Validate request body
   if (
@@ -141,32 +133,49 @@ app.put("/tasks/:id", (req, res) => {
     });
   }
 
-  if (title !== undefined) {
-    task.title = title.trim();
-  }
+  try {
+    const result = updateTask.run(
+      title === undefined ? null : title.trim(),
+      done === undefined ? null : Number(done),
+      id,
+    );
 
-  if (done !== undefined) {
-    task.done = done;
-  }
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
 
-  res.json(task);
+    const updatedTask = getTaskById.get(id);
+
+    if (!updatedTask) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    return res.status(200).json({
+      ...updatedTask,
+      done: Boolean(updatedTask.done),
+    });
+  } catch (error) {
+    console.error("Failed to update task:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // Delete a task
 app.delete("/tasks/:id", (req, res) => {
   const id = Number(req.params.id);
 
-  const taskIndex = tasks.findIndex((task) => task.id === id);
+  try {
+    const result = deleteTask.run(id);
 
-  if (taskIndex === -1) {
-    return res.status(404).json({
-      error: "Task not found",
-    });
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    return res.status(204).send();
+  } catch (error) {
+    console.error("Failed to delete task:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
-
-  tasks.splice(taskIndex, 1);
-
-  res.status(204).send();
 });
 
 app.listen(PORT, () => {
